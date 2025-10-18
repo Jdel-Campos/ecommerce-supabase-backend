@@ -1,0 +1,25 @@
+{
+  "version": "5",
+  "redirects": {
+    "https://esm.sh/@types/bcryptjs@~2.4.6/index.d.ts": "https://esm.sh/@types/bcryptjs@2.4.6/index.d.ts"
+  },
+  "remote": {
+    "https://esm.sh/bcryptjs@2.4.3": "49851f367e562ad6e108c851ced8948944ea392fd46e576f7fdb1eb9e1ffddf0",
+    "https://esm.sh/bcryptjs@2.4.3/denonext/bcryptjs.mjs": "ae86e85fd8be728c95f3a5255bf7e85e4b54315bdbfcca4647490bd3140c9907"
+  },
+  "workspace": {
+    "packageJson": {
+      "dependencies": [
+        "npm:@supabase/supabase-js@^2.75.0",
+        "npm:@types/jest@30",
+        "npm:@types/supertest@^6.0.3",
+        "npm:dotenv@^17.2.3",
+        "npm:jest@^30.2.0",
+        "npm:supabase@^2.51.0",
+        "npm:supertest@^7.1.4",
+        "npm:ts-jest@^29.4.5",
+        "npm:typescript@^5.9.3"
+      ]
+    }
+  }
+}

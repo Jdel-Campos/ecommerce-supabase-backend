@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Painel de Testes — Supabase E-commerce</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <!-- TELA DE LOGIN -->
+    <div id="loginScreen" class="login-screen">
+      <div class="login-container">
+        <h1>🔐 Login</h1>
+        <p>Faça login para acessar o painel de testes</p>
+        
+        <form id="loginForm">
+          <label for="loginEmail">E-mail</label>
+          <input
+            id="loginEmail"
+            type="email"
+            placeholder="ex: admin@exemplo.com"
+            autocomplete="email"
+            required
+          />
+
+          <label for="loginPassword">Senha</label>
+          <input
+            id="loginPassword"
+            type="password"
+            placeholder="Digite sua senha"
+            autocomplete="current-password"
+            required
+          />
+
+          <button id="loginBtn" type="submit">Entrar</button>
+        </form>
+
+        <p id="loginMessage" class="login-message" aria-live="polite"></p>
+
+        <div class="login-hint">
+          <p><strong>Credenciais de teste:</strong></p>
+          <ul>
+            <li>Admin: admin@exemplo.com / admin_secure_password</li>
+            <li>Cliente: alice@example.com / user_secure_password</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAINEL PRINCIPAL (PROTEGIDO) -->
+    <main id="mainPanel" class="container" style="display: none;">
+      <div class="header-with-logout">
+        <h1>🧪 Painel de Testes — Supabase E-commerce</h1>
+        <div class="user-info">
+          <span id="userEmail"></span>
+          <button id="logoutBtn" type="button" class="logout-btn">Sair</button>
+        </div>
+      </div>
+
+      <!-- SEÇÕES DE AÇÕES -->
+      <div class="actions">
+        <!-- EXPORTAR CSV -->
+        <section>
+          <h2>📦 Exportar CSV</h2>
+
+          <label for="customerId">ID do Cliente (UUID)</label>
+          <input
+            id="customerId"
+            type="text"
+            placeholder="ex: ddeb27fb-d9a0-4624-be4d-4615062daed4"
+            autocomplete="off"
+          />
+
+          <button id="exportCsvBtn" type="button">Exportar CSV</button>
+        </section>
+
+        <!-- ENVIAR E-MAIL -->
+        <section>
+          <h2>✉️ Enviar E-mail de Confirmação</h2>
+
+          <label for="email">E-mail do Cliente</label>
+          <input
+            id="email"
+            type="email"
+            placeholder="ex: cliente@exemplo.com"
+            autocomplete="email"
+          />
+
+          <label for="orderId">ID do Pedido (UUID)</label>
+          <input
+            id="orderId"
+            type="text"
+            placeholder="ex: 1b2f36f3-7ad4-4e83-8ff9-7ccfdcb67b76"
+            autocomplete="off"
+          />
+
+          <button id="sendEmailBtn" type="button">Enviar E-mail</button>
+        </section>
+
+        <!-- CONSULTAR PEDIDOS -->
+        <section>
+          <h2>🔍 Consultar Pedidos do Cliente</h2>
+
+          <label for="customerIdQuery">ID do Cliente (UUID)</label>
+          <input
+            id="customerIdQuery"
+            type="text"
+            placeholder="ex: ddeb27fb-d9a0-4624-be4d-4615062daed4"
+          />
+
+          <button id="queryOrdersBtn" type="button">Consultar Pedidos</button>
+        </section>
+      </div>
+
+      <!-- TABELA DE RESULTADOS -->
+      <div class="table-wrapper">
+        <table id="ordersTable">
+          <thead>
+            <tr>
+              <th>Pedido</th>
+              <th>Status</th>
+              <th>Total</th>
+              <th>Data</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <!-- MENSAGEM DE STATUS -->
+      <p id="message" aria-live="polite"></p>
+
+      <footer>
+        <p>
+          <small>
+            © 2025 Supabase E-commerce — Desenvolvido por Jardel Campos.
+          </small>
+        </p>
+      </footer>
+    </main>
+    <script src="env.js"></script>
+    <script src="./script_with_auth.js"></script>
+  </body>
+</html>
+
