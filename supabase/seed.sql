@@ -1,105 +1,132 @@
 -- =============================================
--- SEED DATA: E-COMMERCE BACKEND (COMPATÍVEL COM SUPABASE AUTH)
+-- SEED DATA: E-COMMERCE BACKEND (SUPABASE-FRIENDLY)
+-- DO NOT ALTER auth.users. Use real UUIDs below.
 -- =============================================
 
--- 🔄 Limpa dados anteriores
-truncate table order_items cascade;
-truncate table orders cascade;
-truncate table products cascade;
-truncate table customers cascade;
-truncate table users cascade;
+BEGIN;
+
+-- Cleaning with reset of IDs
+TRUNCATE TABLE order_items RESTART IDENTITY CASCADE;
+TRUNCATE TABLE orders RESTART IDENTITY CASCADE;
+TRUNCATE TABLE products RESTART IDENTITY CASCADE;
+TRUNCATE TABLE customers RESTART IDENTITY CASCADE;
 
 -- =============================================
--- 1️⃣ USERS (Admin + Clientes)
--- ⚙️ ID será o mesmo do Supabase Auth (use o mesmo UUID da tabela auth.users)
--- Você pode substituir pelos reais depois com:
--- select id, email from auth.users;
-insert into auth.users (id, email, encrypted_password, email_confirmed_at)
-values
-  ('00000000-0000-0000-0000-000000000001', 'admin@exemplo.com', crypt('admin_secure_password', gen_salt('bf')), now()),
-  ('00000000-0000-0000-0000-000000000002', 'alice@example.com', crypt('user_secure_password', gen_salt('bf')), now()),
-  ('00000000-0000-0000-0000-000000000003', 'bob@example.com', crypt('user_secure_password', gen_salt('bf')), now()),
-  ('00000000-0000-0000-0000-000000000004', 'charlie@example.com', crypt('user_secure_password', gen_salt('bf')), now())
-on conflict (id) do nothing;
+-- 1) CUSTOMERS (linked to auth.users by user_id)
+-- Only insert customers for users that exist in auth.users
+INSERT INTO customers (user_id, name, email, phone, address)
+SELECT au.id, 'Alice Doe', 'alice@example.com', '1111111111', '123 Main St'
+FROM auth.users au
+WHERE au.email = 'alice@example.com'
+ON CONFLICT (email) DO NOTHING;
+
+INSERT INTO customers (user_id, name, email, phone, address)
+SELECT au.id, 'Bob Smith', 'bob@example.com', '2222222222', '456 High St'
+FROM auth.users au
+WHERE au.email = 'bob@example.com'
+ON CONFLICT (email) DO NOTHING;
+
+INSERT INTO customers (user_id, name, email, phone, address)
+SELECT au.id, 'Charlie Brown', 'charlie@example.com', '3333333333', '789 Park Ave'
+FROM auth.users au
+WHERE au.email = 'charlie@example.com'
+ON CONFLICT (email) DO NOTHING;
 
 -- =============================================
--- 2️⃣ CUSTOMERS (vinculados ao email dos usuários)
-insert into customers (name, email, phone, address)
-values 
-  ('Alice Doe', 'alice@example.com', '1111111111', '123 Main St'),
-  ('Bob Smith', 'bob@example.com', '2222222222', '456 High St'),
-  ('Charlie Brown', 'charlie@example.com', '3333333333', '789 Park Ave')
-on conflict (email) do nothing;
+-- 2) PRODUCTS
+-- Guarantee unique(name) and/or unique(sku)
+INSERT INTO products (name, description, price, stock, sku)
+VALUES
+  ('Laptop',  '15-inch laptop',      3500.00,  5,  'LAP-15'),
+  ('Mouse',   'Wireless mouse',       150.00, 50,  'MOU-WLS'),
+  ('Keyboard','Mechanical keyboard',  200.00, 20,  'KEY-MEC'),
+  ('Monitor', '27-inch 4K display',  1200.00, 10,  'MON-27-4K'),
+  ('Headset', 'Noise cancelling',     350.00, 15,  'HDS-NC')
+ON CONFLICT (name) DO NOTHING;
 
 -- =============================================
--- 3️⃣ PRODUCTS
-insert into products (name, description, price, stock)
-values
-  ('Laptop', '15-inch laptop', 3500.00, 5),
-  ('Mouse', 'Wireless mouse', 150.00, 50),
-  ('Keyboard', 'Mechanical keyboard', 200.00, 20),
-  ('Monitor', '27-inch 4K display', 1200.00, 10),
-  ('Headset', 'Noise cancelling headset', 350.00, 15)
-on conflict (name) do nothing;
+-- 3) ORDERS (one order per customer)
+INSERT INTO orders (customer_id, total_amount, status)
+SELECT c.id, 0, 'pending'::order_status
+FROM customers c
+ON CONFLICT DO NOTHING;
 
 -- =============================================
--- 4️⃣ ORDERS (vinculados aos customers)
-insert into orders (customer_id, total_amount, status)
-select id, 0, 'pending'::order_status from customers
-on conflict do nothing;
+-- 4) ORDER ITEMS
+-- Helper CTE to get (order_id by customer) and (product_id by name)
+WITH
+  oc AS (
+    SELECT o.id AS order_id, c.email
+    FROM orders o
+    JOIN customers c ON c.id = o.customer_id
+  ),
+  p AS (
+    SELECT id, name FROM products
+  )
+-- All order items in one statement
+INSERT INTO order_items (order_id, product_id, quantity, unit_price)
+-- Alice: Laptop (1) + Mouses (2)
+SELECT oc.order_id, p.id, 1, p2.price
+FROM oc
+JOIN p ON p.name = 'Laptop'
+JOIN products p2 ON p2.id = p.id
+WHERE oc.email = 'alice@example.com'
+UNION ALL
+SELECT oc.order_id, p.id, 2, p2.price
+FROM oc
+JOIN p ON p.name = 'Mouse'
+JOIN products p2 ON p2.id = p.id
+WHERE oc.email = 'alice@example.com'
+UNION ALL
+-- Bob: Keyboard (1) + Monitors (1)
+SELECT oc.order_id, p.id, 1, p2.price
+FROM oc
+JOIN p ON p.name = 'Keyboard'
+JOIN products p2 ON p2.id = p.id
+WHERE oc.email = 'bob@example.com'
+UNION ALL
+SELECT oc.order_id, p.id, 1, p2.price
+FROM oc
+JOIN p ON p.name = 'Monitor'
+JOIN products p2 ON p2.id = p.id
+WHERE oc.email = 'bob@example.com'
+UNION ALL
+-- Charlie: Headsets (3)
+SELECT oc.order_id, p.id, 3, p2.price
+FROM oc
+JOIN p ON p.name = 'Headset'
+JOIN products p2 ON p2.id = p.id
+WHERE oc.email = 'charlie@example.com';
 
 -- =============================================
--- 5️⃣ ORDER ITEMS
--- Alice: Laptop + 2x Mouse
-insert into order_items (order_id, product_id, quantity, unit_price)
-select o.id, p.id, 1, p.price
-from orders o
-join customers c on o.customer_id = c.id
-join products p on p.name = 'Laptop'
-where c.email = 'alice@example.com';
-
-insert into order_items (order_id, product_id, quantity, unit_price)
-select o.id, p.id, 2, p.price
-from orders o
-join customers c on o.customer_id = c.id
-join products p on p.name = 'Mouse'
-where c.email = 'alice@example.com';
-
--- Bob: Keyboard + Monitor
-insert into order_items (order_id, product_id, quantity, unit_price)
-select o.id, p.id, 1, p.price
-from orders o
-join customers c on o.customer_id = c.id
-join products p on p.name = 'Keyboard'
-where c.email = 'bob@example.com';
-
-insert into order_items (order_id, product_id, quantity, unit_price)
-select o.id, p.id, 1, p.price
-from orders o
-join customers c on o.customer_id = c.id
-join products p on p.name = 'Monitor'
-where c.email = 'bob@example.com';
-
--- Charlie: 3x Headset
-insert into order_items (order_id, product_id, quantity, unit_price)
-select o.id, p.id, 3, p.price
-from orders o
-join customers c on o.customer_id = c.id
-join products p on p.name = 'Headset'
-where c.email = 'charlie@example.com';
+-- 5) Update totals
+UPDATE orders o
+SET total_amount = t.total
+FROM (
+  SELECT order_id, SUM(quantity * unit_price)::numeric AS total
+  FROM order_items
+  GROUP BY order_id
+) t
+WHERE t.order_id = o.id;
 
 -- =============================================
--- 6️⃣ Atualiza totais e status
-update orders
-set total_amount = (
-  select sum(quantity * unit_price)
-  from order_items
-  where order_items.order_id = orders.id
-);
+-- 6) Update status (example)
+UPDATE orders o
+SET status = CASE
+  WHEN o.customer_id = (SELECT id FROM customers WHERE email = 'alice@example.com')  THEN 'paid'::order_status
+  WHEN o.customer_id = (SELECT id FROM customers WHERE email = 'bob@example.com')    THEN 'shipped'::order_status
+  ELSE 'pending'::order_status
+END;
 
-update orders
-set status = case
-  when customer_id = (select id from customers where email = 'alice@example.com') then 'paid'::order_status
-  when customer_id = (select id from customers where email = 'bob@example.com') then 'shipped'::order_status
-  else 'pending'::order_status
-end;
+-- =============================================
+-- 7) Reduce stock based on the items of the order
+UPDATE products p
+SET stock = p.stock - COALESCE(s.sold, 0)
+FROM (
+  SELECT product_id, SUM(quantity) AS sold
+  FROM order_items
+  GROUP BY product_id
+) s
+WHERE s.product_id = p.id;
+
+COMMIT;

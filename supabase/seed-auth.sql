@@ -1,79 +1,78 @@
 -- =============================================
--- SEED AUTH USERS (SUPABASE AUTH + PUBLIC.USERS)
--- =============================================
--- Executar no Supabase SQL Editor ou via CLI:
--- supabase db seed --file supabase/seed_auth.sql
+-- SEED AUTH → PUBLIC (SAFE SYNCHRONIZATION)
+-- DO NOT insert in auth.users. Use Admin API/Sign In/Sign Up to create users.
 -- =============================================
 
--- ✅ Cria usuários diretamente em auth.users
--- Senhas padrão: admin_secure_password / user_secure_password
--- (usa função interna crypt() para gerar o hash localmente)
+BEGIN;
 
-insert into auth.users (id, email, encrypted_password, email_confirmed_at, raw_user_meta_data)
-values
-  (
-    '00000000-0000-0000-0000-000000000001',
-    'admin@exemplo.com',
-    crypt('admin_secure_password', gen_salt('bf')),
-    now(),
-    jsonb_build_object('name', 'Admin User')
-  ),
-  (
-    '00000000-0000-0000-0000-000000000002',
-    'alice@example.com',
-    crypt('user_secure_password', gen_salt('bf')),
-    now(),
-    jsonb_build_object('name', 'Alice Doe')
-  ),
-  (
-    '00000000-0000-0000-0000-000000000003',
-    'bob@example.com',
-    crypt('user_secure_password', gen_salt('bf')),
-    now(),
-    jsonb_build_object('name', 'Bob Smith')
-  ),
-  (
-    '00000000-0000-0000-0000-000000000004',
-    'charlie@example.com',
-    crypt('user_secure_password', gen_salt('bf')),
-    now(),
-    jsonb_build_object('name', 'Charlie Brown')
-  )
-on conflict (id) do nothing;
-
--- =============================================
--- 🧩 FORÇA EXECUÇÃO DO TRIGGER handle_new_user()
--- (Se já estiver ativo, ele vai inserir automaticamente na public.users)
--- =============================================
-do $$
+-- 1) Idempotent synchronization function
+--   - Read auth.users
+--   - Insert/update public.users as needed
+--   - SECURITY DEFINER to allow reading in auth.* (adjust the OWNER if needed)
+create or replace function public.sync_auth_users_to_public(target_emails text[] default null)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
 begin
-  perform public.handle_new_user() from auth.users;
-exception
-  when others then
-    raise notice 'Trigger handle_new_user já existe ou foi executado.';
+  -- Insert users that exist in auth.users and are not in public.users
+  insert into public.users as pu (id, email, role, name)
+  select
+    au.id,
+    au.email,
+    coalesce(pu.role, 'customer') as role, -- default role if not exists
+    coalesce((au.raw_user_meta_data->>'name'), pu.name) as name
+  from auth.users au
+  left join public.users pu on pu.id = au.id
+  where (target_emails is null or au.email = any(target_emails))
+    and pu.id is null
+  on conflict (id) do nothing;
+
+  -- Optional: update mutable fields (name) when coming from meta
+  update public.users pu
+  set name = coalesce(au.raw_user_meta_data->>'name', pu.name)
+  from auth.users au
+  where pu.id = au.id
+    and (target_emails is null or au.email = any(target_emails))
+    and (au.raw_user_meta_data->>'name') is not null
+    and pu.name is distinct from (au.raw_user_meta_data->>'name');
 end;
 $$;
 
--- =============================================
--- 🔍 VERIFICA SINCRONIZAÇÃO
--- =============================================
--- Deve mostrar os 4 usuários em public.users
-select id, email, role from public.users;
+-- 2) Run the sync for the desired emails (adjust the list)
+select public.sync_auth_users_to_public(ARRAY[
+  'admin@example.com',
+  'alice@example.com',
+  'bob@example.com',
+  'charlie@example.com'
+]);
 
--- =============================================
--- ✅ Ajusta role do admin manualmente (caso necessário)
--- =============================================
+-- 3) Adjust the admin role (idempotent)
 update public.users
 set role = 'admin'
-where email = 'admin@exemplo.com';
+where email = 'admin@example.com';
 
--- =============================================
--- ✅ Exibe resumo final
--- =============================================
+-- 4) Checks
+-- Should list synchronized users with their roles
+table public.users;
+
+-- Final summary (join with auth.users to check creation dates/metadata)
 select
   u.id,
   u.email,
   u.role,
+  u.name,
   a.created_at as auth_created_at
 from public.users u
-join auth.users a on a.id = u.id;
+join auth.users a on a.id = u.id
+where u.email in (
+  'admin@example.com',
+  'alice@example.com',
+  'bob@example.com',
+  'charlie@example.com'
+)
+order by u.email;
+
+COMMIT;

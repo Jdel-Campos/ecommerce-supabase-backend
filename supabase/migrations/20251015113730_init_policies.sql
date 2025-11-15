@@ -1,284 +1,235 @@
 -- =============================================
--- RLS POLICIES: E-COMMERCE BACKEND (REFATORADO)
+-- RLS POLICIES: E-COMMERCE BACKEND (REV)
+-- Pré-condições:
+--   - customers.user_id uuid not null references auth.users(id) UNIQUE
+--   - public.users (id = auth.users.id), coluna role com 'admin' quando aplicável
 -- =============================================
 
--- 1️⃣ Ativa o Row Level Security
-alter table users enable row level security;
-alter table customers enable row level security;
-alter table orders enable row level security;
-alter table order_items enable row level security;
-alter table products enable row level security;
-
--- =============================================
--- 2️⃣ USERS
--- =============================================
-
--- Usuário pode ver e atualizar apenas seus próprios dados
-create policy "users_select_own"
-  on users
-  for select
-  using (auth.uid() = id or role = 'admin');
-
-create policy "users_update_own"
-  on users
-  for update
-  using (auth.uid() = id or role = 'admin')
-  with check (auth.uid() = id or role = 'admin');
-
--- Apenas admin pode inserir ou deletar usuários
-create policy "admin_insert_users"
-  on users for insert
-  with check (role = 'admin');
-
-create policy "admin_delete_users"
-  on users for delete
-  using (role = 'admin');
-
--- =============================================
--- 3️⃣ CUSTOMERS
--- =============================================
-
--- Usuário comum vê apenas o seu registro de cliente (por email)
-create policy "customers_select_own"
-  on customers
-  for select
-  using (
-    exists (
-      select 1
-      from users u
-      where u.id = auth.uid()
-      and u.email = customers.email
-    )
-    or exists (
-      select 1 from users u where u.id = auth.uid() and u.role = 'admin'
-    )
+-- Helper: checa se o ator é admin
+create or replace function public.is_admin(p_uid uuid)
+returns boolean
+language sql
+stable
+as $$
+  select exists (
+    select 1 from public.users u
+    where u.id = p_uid and u.role = 'admin'
   );
+$$;
 
--- Pode atualizar apenas seus dados
-create policy "customers_update_own"
-  on customers
+-- 1) Ativa RLS (opcional: FORCE para endurecer)
+alter table public.users        enable row level security;
+alter table public.customers    enable row level security;
+alter table public.orders       enable row level security;
+alter table public.order_items  enable row level security;
+alter table public.products     enable row level security;
+
+-- Opcional (recomendado em produção):
+-- alter table public.users        force row level security;
+-- alter table public.customers    force row level security;
+-- alter table public.orders       force row level security;
+-- alter table public.order_items  force row level security;
+-- alter table public.products     force row level security;
+
+-- =============================================
+-- 2) USERS  (perfil da aplicação, não auth.users)
+-- O usuário vê/edita somente o próprio registro; admin vê/edita todos.
+-- Inserts/Deletes apenas por admin (na prática, crie via Admin API e sincronize).
+-- =============================================
+
+drop policy if exists users_select_own  on public.users;
+drop policy if exists users_update_own  on public.users;
+drop policy if exists admin_insert_users on public.users;
+drop policy if exists admin_delete_users on public.users;
+
+create policy users_select_own
+  on public.users
+  for select
+  using ( id = auth.uid() or public.is_admin(auth.uid()) );
+
+create policy users_update_own
+  on public.users
   for update
-  using (
-    exists (
-      select 1
-      from users u
-      where u.id = auth.uid()
-      and u.email = customers.email
-    )
-    or exists (
-      select 1 from users u where u.id = auth.uid() and u.role = 'admin'
-    )
-  )
-  with check (
-    exists (
-      select 1
-      from users u
-      where u.id = auth.uid()
-      and u.email = customers.email
-    )
-    or exists (
-      select 1 from users u where u.id = auth.uid() and u.role = 'admin'
-    )
-  );
+  using ( id = auth.uid() or public.is_admin(auth.uid()) )
+  with check ( id = auth.uid() or public.is_admin(auth.uid()) );
 
--- Admin pode inserir e deletar clientes
-create policy "admin_insert_customers"
-  on customers
+create policy admin_insert_users
+  on public.users
   for insert
-  with check (exists (select 1 from users where id = auth.uid() and role = 'admin'));
+  with check ( public.is_admin(auth.uid()) );
 
-create policy "admin_delete_customers"
-  on customers
+create policy admin_delete_users
+  on public.users
   for delete
-  using (exists (select 1 from users where id = auth.uid() and role = 'admin'));
+  using ( public.is_admin(auth.uid()) );
 
 -- =============================================
--- 4️⃣ ORDERS (CORRIGIDO – sem alias)
+-- 3) CUSTOMERS
+-- Dono (via customers.user_id) vê/edita o próprio registro; admin tudo.
 -- =============================================
 
--- Ver apenas pedidos associados ao próprio cliente (ou admin)
-create policy "orders_select_own"
-  on orders
+drop policy if exists customers_select_own on public.customers;
+drop policy if exists customers_update_own on public.customers;
+drop policy if exists admin_insert_customers on public.customers;
+drop policy if exists admin_delete_customers on public.customers;
+
+create policy customers_select_own
+  on public.customers
+  for select
+  using ( user_id = auth.uid() or public.is_admin(auth.uid()) );
+
+create policy customers_update_own
+  on public.customers
+  for update
+  using ( user_id = auth.uid() or public.is_admin(auth.uid()) )
+  with check ( user_id = auth.uid() or public.is_admin(auth.uid()) );
+
+create policy admin_insert_customers
+  on public.customers
+  for insert
+  with check ( public.is_admin(auth.uid()) );
+
+create policy admin_delete_customers
+  on public.customers
+  for delete
+  using ( public.is_admin(auth.uid()) );
+
+-- =============================================
+-- 4) ORDERS
+-- Pertencem ao customer do usuário; admin tem acesso total.
+-- =============================================
+
+drop policy if exists orders_select_own on public.orders;
+drop policy if exists orders_insert_own on public.orders;
+drop policy if exists orders_update_own on public.orders;
+drop policy if exists orders_delete_own on public.orders;
+
+create policy orders_select_own
+  on public.orders
   for select
   using (
-    exists (
-      select 1
-      from customers c
-      join users u on c.email = u.email
-      where orders.customer_id = c.id
-        and u.id = auth.uid()
-    )
-    or exists (
-      select 1 from users where id = auth.uid() and role = 'admin'
-    )
+    customer_id in (select id from public.customers where user_id = auth.uid())
+    or public.is_admin(auth.uid())
   );
 
--- Inserir pedidos apenas para o próprio cliente (ou admin)
-create policy "orders_insert_own"
-  on orders
+create policy orders_insert_own
+  on public.orders
   for insert
   with check (
-    exists (
-      select 1
-      from customers c
-      join users u on c.email = u.email
-      where c.id = orders.customer_id
-        and u.id = auth.uid()
-    )
-    or exists (
-      select 1 from users where id = auth.uid() and role = 'admin'
-    )
+    customer_id in (select id from public.customers where user_id = auth.uid())
+    or public.is_admin(auth.uid())
   );
 
--- Atualizar apenas pedidos próprios (ou admin)
-create policy "orders_update_own"
-  on orders
+create policy orders_update_own
+  on public.orders
   for update
   using (
-    exists (
-      select 1
-      from customers c
-      join users u on c.email = u.email
-      where orders.customer_id = c.id
-        and u.id = auth.uid()
-    )
-    or exists (
-      select 1 from users where id = auth.uid() and role = 'admin'
-    )
+    customer_id in (select id from public.customers where user_id = auth.uid())
+    or public.is_admin(auth.uid())
   )
   with check (
-    exists (
-      select 1
-      from customers c
-      join users u on c.email = u.email
-      where orders.customer_id = c.id
-        and u.id = auth.uid()
-    )
-    or exists (
-      select 1 from users where id = auth.uid() and role = 'admin'
-    )
+    customer_id in (select id from public.customers where user_id = auth.uid())
+    or public.is_admin(auth.uid())
   );
 
--- Deletar apenas pedidos próprios (ou admin)
-create policy "orders_delete_own"
-  on orders
+create policy orders_delete_own
+  on public.orders
   for delete
   using (
-    exists (
-      select 1
-      from customers c
-      join users u on c.email = u.email
-      where orders.customer_id = c.id
-        and u.id = auth.uid()
-    )
-    or exists (
-      select 1 from users where id = auth.uid() and role = 'admin'
-    )
+    customer_id in (select id from public.customers where user_id = auth.uid())
+    or public.is_admin(auth.uid())
   );
 
 -- =============================================
--- 5️⃣ ORDER ITEMS
+-- 5) ORDER ITEMS
+-- Herdam o ownership do pedido; admin tem acesso total.
 -- =============================================
 
--- Usuário vê apenas itens de pedidos seus
-create policy "order_items_select_own"
-  on order_items
+drop policy if exists order_items_select_own on public.order_items;
+drop policy if exists order_items_insert_own on public.order_items;
+drop policy if exists order_items_update_own on public.order_items;
+drop policy if exists order_items_delete_own on public.order_items;
+
+create policy order_items_select_own
+  on public.order_items
   for select
   using (
-    exists (
-      select 1
-      from orders o
-      join customers c on o.customer_id = c.id
-      join users u on c.email = u.email
-      where order_items.order_id = o.id
-      and u.id = auth.uid()
+    order_id in (
+      select o.id
+      from public.orders o
+      join public.customers c on c.id = o.customer_id
+      where c.user_id = auth.uid()
     )
-    or exists (
-      select 1 from users where id = auth.uid() and role = 'admin'
-    )
+    or public.is_admin(auth.uid())
   );
 
--- Inserir, atualizar e deletar apenas itens de pedidos próprios
-create policy "order_items_insert_own"
-  on order_items
+create policy order_items_insert_own
+  on public.order_items
   for insert
   with check (
-    exists (
-      select 1
-      from orders o
-      join customers c on o.customer_id = c.id
-      join users u on c.email = u.email
-      where order_items.order_id = o.id
-      and u.id = auth.uid()
+    order_id in (
+      select o.id
+      from public.orders o
+      join public.customers c on c.id = o.customer_id
+      where c.user_id = auth.uid()
     )
-    or exists (
-      select 1 from users where id = auth.uid() and role = 'admin'
-    )
+    or public.is_admin(auth.uid())
   );
 
-create policy "order_items_update_own"
-  on order_items
+create policy order_items_update_own
+  on public.order_items
   for update
   using (
-    exists (
-      select 1
-      from orders o
-      join customers c on o.customer_id = c.id
-      join users u on c.email = u.email
-      where order_items.order_id = o.id
-      and u.id = auth.uid()
+    order_id in (
+      select o.id
+      from public.orders o
+      join public.customers c on c.id = o.customer_id
+      where c.user_id = auth.uid()
     )
-    or exists (
-      select 1 from users where id = auth.uid() and role = 'admin'
-    )
+    or public.is_admin(auth.uid())
   )
   with check (
-    exists (
-      select 1
-      from orders o
-      join customers c on o.customer_id = c.id
-      join users u on c.email = u.email
-      where order_items.order_id = o.id
-      and u.id = auth.uid()
+    order_id in (
+      select o.id
+      from public.orders o
+      join public.customers c on c.id = o.customer_id
+      where c.user_id = auth.uid()
     )
-    or exists (
-      select 1 from users where id = auth.uid() and role = 'admin'
-    )
+    or public.is_admin(auth.uid())
   );
 
-create policy "order_items_delete_own"
-  on order_items
+create policy order_items_delete_own
+  on public.order_items
   for delete
   using (
-    exists (
-      select 1
-      from orders o
-      join customers c on o.customer_id = c.id
-      join users u on c.email = u.email
-      where order_items.order_id = o.id
-      and u.id = auth.uid()
+    order_id in (
+      select o.id
+      from public.orders o
+      join public.customers c on c.id = o.customer_id
+      where c.user_id = auth.uid()
     )
-    or exists (
-      select 1 from users where id = auth.uid() and role = 'admin'
-    )
+    or public.is_admin(auth.uid())
   );
 
 -- =============================================
--- 6️⃣ PRODUCTS
+-- 6) PRODUCTS
+-- Leitura pública (anon + authenticated); apenas admin gerencia.
 -- =============================================
 
--- Produtos são públicos para leitura
-create policy "products_select_public"
-  on products
-  for select
-  using (true);
+drop policy if exists products_select_public on public.products;
+drop policy if exists admin_manage_products on public.products;
 
--- Apenas admin pode gerenciar produtos
-create policy "admin_manage_products"
-  on products
+create policy products_select_public
+  on public.products
+  for select
+  using ( true );
+
+create policy admin_manage_products
+  on public.products
   for all
-  using (exists (select 1 from users where id = auth.uid() and role = 'admin'))
-  with check (exists (select 1 from users where id = auth.uid() and role = 'admin'));
+  using ( public.is_admin(auth.uid()) )
+  with check ( public.is_admin(auth.uid()) );
 
-grant select on products to anon;
-grant select on products to authenticated;
+-- Permissões de tabela (RLS ainda se aplica)
+grant usage on schema public to anon, authenticated;
+grant select on public.products to anon, authenticated;

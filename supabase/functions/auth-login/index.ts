@@ -3,26 +3,51 @@
 // =============================================
 // Caminho: supabase/functions/auth-login/index.ts
 
-import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import "@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "@supabase/supabase-js";
 
 // ===== CORS CONFIG =====
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 
-serve(async (req) => {
+Deno.serve(async (req) => {
   // ✅ Preflight CORS
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
 
   try {
-    // ✅ Recebe corpo da requisição
-    const { email, password } = await req.json()
+    // ✅ Garante que apenas POST é aceito
+    if (req.method !== 'POST') {
+      return new Response(
+        JSON.stringify({ message: 'Método não permitido' }),
+        { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
 
-    if (!email || !password) {
+    // ✅ Recebe corpo da requisição
+    let payload: unknown
+    try {
+      payload = await req.json()
+    } catch {
+      return new Response(
+        JSON.stringify({ message: 'Formato de JSON inválido' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
+    const { email, password } = payload as {
+      email?: unknown
+      password?: unknown
+    }
+
+    const normalizedEmail = typeof email === 'string' ? email.trim() : ''
+    const passwordValue = typeof password === 'string' ? password : ''
+
+    if (!normalizedEmail || !passwordValue) {
       return new Response(
         JSON.stringify({ message: 'E-mail e senha são obrigatórios' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -46,8 +71,8 @@ serve(async (req) => {
 
     // ✅ Usa o Supabase Auth para autenticação
     const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
+      email: normalizedEmail,
+      password: passwordValue,
     })
 
     if (error) {
@@ -73,10 +98,11 @@ serve(async (req) => {
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   } catch (err) {
+    const message = err instanceof Error ? err.message : 'Erro desconhecido'
     console.error('💥 Erro inesperado no login:', err)
     return new Response(
-      JSON.stringify({ message: 'Erro interno do servidor', details: err.message }),
+      JSON.stringify({ message: 'Erro interno do servidor', details: message }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   }
-})
+});

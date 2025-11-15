@@ -1,270 +1,248 @@
-// =============================================
-// CONFIGURAÇÃO E VARIÁVEIS GLOBAIS
-// =============================================
+// ------------ Guard-rails de ENV ------------
+if (!window.ENV?.SUPABASE_URL || !window.ENV?.SUPABASE_ANON_KEY) {
+  throw new Error('Configuração ausente: defina SUPABASE_URL e SUPABASE_ANON_KEY em env.js');
+}
+
+// ------------ Config / Estado ------------
 const API_BASE = `${window.ENV.SUPABASE_URL}/functions/v1`;
+let currentSession = null;
 
-let currentUser = null;
+// ------------ DOM ------------
+const qs = (sel) => document.querySelector(sel);
+const loginScreen = qs('#loginScreen');
+const mainPanel   = qs('#mainPanel');
+const loginForm   = qs('#loginForm');
+const loginBtn    = qs('#loginBtn');
+const loginMessage= qs('#loginMessage');
+const logoutBtn   = qs('#logoutBtn');
+const userEmail   = qs('#userEmail');
+const exportForm  = qs('#exportForm');
+const emailForm   = qs('#emailForm');
+const queryForm   = qs('#queryForm');
+const exportBtn   = qs('#exportCsvBtn');
+const emailBtn    = qs('#sendEmailBtn');
+const queryBtn    = qs('#queryOrdersBtn');
+const tableWrap   = qs('.table-wrapper');
+const ordersTBody = qs('#ordersTable tbody');
+const messageEl   = qs('#message');
 
-// =============================================
-// ELEMENTOS DO DOM
-// =============================================
-const loginScreen = document.getElementById('loginScreen');
-const mainPanel = document.getElementById('mainPanel');
-const loginForm = document.getElementById('loginForm');
-const loginBtn = document.getElementById('loginBtn');
-const loginMessage = document.getElementById('loginMessage');
-const logoutBtn = document.getElementById('logoutBtn');
-const userEmailSpan = document.getElementById('userEmail');
-const message = document.getElementById('message');
+// ------------ Utils ------------
+const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const uuidV4  = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-// =============================================
-// FUNÇÕES DE MENSAGEM
-// =============================================
-function showMessage(text, type = 'info') {
-  message.textContent = text;
-  message.className = type; // usa classes CSS como .success / .error / .info
-}
+const withButtonLoading = async (btn, labelLoading, fn) => {
+  const prev = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = labelLoading;
+  try { return await fn(); }
+  finally { btn.disabled = false; btn.textContent = prev; }
+};
 
-function showLoginMessage(text, type = 'info') {
-  loginMessage.textContent = text;
-  loginMessage.className = `login-message ${type}`;
-}
+const showMessage = (text, type = 'info') => {
+  messageEl.textContent = text;
+  messageEl.className = `message ${type}`; // use .message + modifiers
+};
 
-// =============================================
-// AUTENTICAÇÃO
-// =============================================
-async function login(email, password) {
-  try {
-    const res = await fetch(`${window.ENV.SUPABASE_URL}/functions/v1/auth-login`, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'apikey': window.ENV.SUPABASE_ANON_KEY,
-        'Authorization': `Bearer ${window.ENV.SUPABASE_ANON_KEY}`
-      },
-      body: JSON.stringify({ email, password }),
-    });
+const setBusy = (busy) => {
+  tableWrap.setAttribute('aria-busy', busy ? 'true' : 'false');
+};
 
-    const data = await res.json();
+// Wrapper genérico de fetch com tratamento consistente
+async function apiFetch(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+  headers.set('Content-Type', 'application/json');
+  headers.set('apikey', window.ENV.SUPABASE_ANON_KEY);
 
-    if (!res.ok) {
-      throw new Error(data.message || 'Erro ao fazer login');
+  const bearer = currentSession?.access_token;
+  if (bearer) headers.set('Authorization', `Bearer ${bearer}`);
+
+  const res = await fetch(url, { ...options, headers });
+  const contentType = res.headers.get('Content-Type') || '';
+
+  // Tenta parsear JSON se fizer sentido
+  const tryParseJSON = async () => {
+    if (contentType.includes('application/json')) {
+      try { return await res.json(); } catch { return null; }
     }
+    return null;
+  };
 
-    return data;
-  } catch (err) {
-    throw err;
+  if (!res.ok) {
+    const data = await tryParseJSON();
+    const msg = data?.message || data?.error || `Erro HTTP ${res.status}`;
+    throw new Error(msg);
   }
+
+  return { res, json: await tryParseJSON(), contentType };
 }
 
-function saveSession(user) {
-  localStorage.setItem('currentUser', JSON.stringify(user));
-  currentUser = user;
+// ------------ Sessão ------------
+function saveSession({ user, session }) {
+  const payload = {
+    user,
+    access_token: session?.access_token ?? null,
+    refresh_token: session?.refresh_token ?? null,
+    expires_at: session?.expires_at ?? null,
+  };
+  localStorage.setItem('sb_session', JSON.stringify(payload));
+  currentSession = payload;
 }
-
 function loadSession() {
-  const saved = localStorage.getItem('currentUser');
-  if (saved) {
-    currentUser = JSON.parse(saved);
-    return true;
-  }
-  return false;
+  try {
+    const raw = localStorage.getItem('sb_session');
+    if (!raw) return false;
+    currentSession = JSON.parse(raw);
+    return !!currentSession?.access_token;
+  } catch { return false; }
 }
-
 function clearSession() {
-  localStorage.removeItem('currentUser');
-  currentUser = null;
+  localStorage.removeItem('sb_session');
+  currentSession = null;
 }
 
-function showMainPanel() {
-  loginScreen.style.display = 'none';
-  mainPanel.style.display = 'block';
-  userEmailSpan.textContent = currentUser.email;
+// ------------ UI ------------
+function showMain() {
+  loginScreen.classList.add('hidden');
+  mainPanel.classList.remove('hidden');
+  userEmail.textContent = currentSession?.user?.email ?? '';
 }
-
-function showLoginScreen() {
-  loginScreen.style.display = 'flex';
-  mainPanel.style.display = 'none';
+function showLogin() {
+  mainPanel.classList.add('hidden');
+  loginScreen.classList.remove('hidden');
   loginMessage.textContent = '';
 }
+const showLoginMessage = (text, type='info') => {
+  loginMessage.textContent = text;
+  loginMessage.className = `login-message ${type}`;
+};
 
-// =============================================
-// EVENT LISTENERS - AUTENTICAÇÃO
-// =============================================
+// ------------ Auth ------------
+async function login(email, password) {
+  const { json } = await apiFetch(`${API_BASE}/auth-login`, {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  });
+  return json; // { user, session }
+}
+
+// ------------ Eventos ------------
 loginForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  
-  const email = document.getElementById('loginEmail').value.trim();
-  const password = document.getElementById('loginPassword').value;
+  const email = qs('#loginEmail').value.trim();
+  const password = qs('#loginPassword').value;
 
-  if (!email || !password) {
-    showLoginMessage('Por favor, preencha todos os campos.', 'error');
-    return;
-  }
+  if (!email || !password) return showLoginMessage('Preencha e-mail e senha.', 'error');
+  if (!emailRe.test(email)) return showLoginMessage('E-mail inválido.', 'error');
 
-  showLoginMessage('Autenticando...', 'info');
-  loginBtn.disabled = true;
-  loginBtn.textContent = 'Entrando...';
-
-  try {
-    const userData = await login(email, password);
-    saveSession(userData.user);
-    showMainPanel();
+  await withButtonLoading(loginBtn, 'Entrando…', async () => {
+    showLoginMessage('Autenticando…', 'info');
+    const payload = await login(email, password);
+    saveSession(payload);
+    showMain();
     showMessage('Login realizado com sucesso!', 'success');
-  } catch (err) {
-    showLoginMessage(`❌ ${err.message}`, 'error');
-  } finally {
-    loginBtn.disabled = false;
-    loginBtn.textContent = 'Entrar';
-  }
+  }).catch(err => showLoginMessage(`❌ ${err.message}`, 'error'));
 });
 
 logoutBtn.addEventListener('click', () => {
   clearSession();
-  showLoginScreen();
+  showLogin();
   showLoginMessage('Você saiu com sucesso.', 'success');
 });
 
-// =============================================
-// VERIFICAÇÃO DE SESSÃO AO CARREGAR
-// =============================================
+// Boot
 window.addEventListener('DOMContentLoaded', () => {
-  if (loadSession()) {
-    showMainPanel();
-  } else {
-    showLoginScreen();
-  }
+  loadSession() ? showMain() : showLogin();
 });
 
-// =============================================
-// FUNCIONALIDADES EXISTENTES (EXPORTAR CSV, EMAIL, CONSULTAR)
-// =============================================
-const exportBtn = document.getElementById('exportCsvBtn');
-const emailBtn = document.getElementById('sendEmailBtn');
+// ------------ Ações ------------
+exportForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const customerId = qs('#customerId').value.trim();
+  if (!uuidV4.test(customerId)) return showMessage('customerId inválido (UUID v4).', 'error');
+  if (!currentSession?.access_token) return showMessage('Sessão expirada. Faça login.', 'error');
 
-exportBtn.addEventListener('click', async () => {
-  const customerId = document.getElementById('customerId').value.trim();
-  if (!customerId) return showMessage('Por favor, forneça o ID do cliente.', 'error');
-
-  showMessage('Gerando CSV...', 'info');
-  exportBtn.disabled = true;
-  exportBtn.textContent = 'Processando...';
-
-  try {
-    const res = await fetch(`${API_BASE}/export-csv`, {
+  await withButtonLoading(exportBtn, 'Processando…', async () => {
+    showMessage('Gerando CSV…', 'info');
+    const { res, contentType } = await apiFetch(`${API_BASE}/export-csv`, {
       method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'apikey': window.ENV.SUPABASE_ANON_KEY,
-        'Authorization': `Bearer ${window.ENV.SUPABASE_ANON_KEY}`
-      },
       body: JSON.stringify({ customerId }),
     });
 
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.message || 'Erro ao exportar CSV');
-    }
-
+    if (!contentType.includes('text/csv')) throw new Error('Resposta não é CSV.');
     const blob = await res.blob();
-    const url = window.URL.createObjectURL(blob);
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `orders_${customerId}.csv`;
+    document.body.appendChild(a);
     a.click();
-    window.URL.revokeObjectURL(url);
-
+    a.remove();
+    URL.revokeObjectURL(url);
     showMessage('CSV exportado com sucesso!', 'success');
-  } catch (err) {
-    showMessage(`❌ ${err.message}`, 'error');
-  } finally {
-    exportBtn.disabled = false;
-    exportBtn.textContent = 'Exportar CSV';
-  }
+  }).catch(err => showMessage(`❌ ${err.message}`, 'error'));
 });
 
-emailBtn.addEventListener('click', async () => {
-  const email = document.getElementById('email').value.trim();
-  const orderId = document.getElementById('orderId').value.trim();
-  if (!email || !orderId)
-    return showMessage('Por favor, forneça o e-mail e o ID do pedido.', 'error');
+emailForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const email = qs('#email').value.trim();
+  const orderId = qs('#orderId').value.trim();
 
-  showMessage('Enviando e-mail...', 'info');
-  emailBtn.disabled = true;
-  emailBtn.textContent = 'Enviando...';
+  if (!emailRe.test(email)) return showMessage('E-mail inválido.', 'error');
+  if (!uuidV4.test(orderId)) return showMessage('orderId inválido (UUID v4).', 'error');
+  if (!currentSession?.access_token) return showMessage('Sessão expirada. Faça login.', 'error');
 
-  try {
-    const res = await fetch(`${API_BASE}/send-confirmation-email`, {
+  await withButtonLoading(emailBtn, 'Enviando…', async () => {
+    showMessage('Enviando e-mail…', 'info');
+    await apiFetch(`${API_BASE}/send-confirmation-email`, {
       method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'apikey': window.ENV.SUPABASE_ANON_KEY,
-        'Authorization': `Bearer ${window.ENV.SUPABASE_ANON_KEY}`
-      },
       body: JSON.stringify({ email, orderId }),
     });
-
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.message || 'Erro ao enviar e-mail');
-
     showMessage('E-mail enviado com sucesso!', 'success');
-  } catch (err) {
-    showMessage(`❌ ${err.message}`, 'error');
-  } finally {
-    emailBtn.disabled = false;
-    emailBtn.textContent = 'Enviar E-mail';
-  }
+  }).catch(err => showMessage(`❌ ${err.message}`, 'error'));
 });
 
-const queryBtn = document.getElementById('queryOrdersBtn');
-const ordersTable = document.getElementById('ordersTable').querySelector('tbody');
+queryForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const customerId = qs('#customerIdQuery').value.trim();
 
-queryBtn.addEventListener('click', async () => {
-  const customerId = document.getElementById('customerIdQuery').value.trim();
-  if (!customerId) return showMessage('Por favor, forneça o ID do cliente.', 'error');
+  if (!uuidV4.test(customerId)) return showMessage('customerId inválido (UUID v4).', 'error');
+  if (!currentSession?.access_token) return showMessage('Sessão expirada. Faça login.', 'error');
 
-  showMessage('Buscando pedidos...', 'info');
-  queryBtn.disabled = true;
-  queryBtn.textContent = 'Carregando...';
-  ordersTable.innerHTML = '';
+  await withButtonLoading(queryBtn, 'Carregando…', async () => {
+    setBusy(true);
+    showMessage('Buscando pedidos…', 'info');
 
-  try {
-    const res = await fetch(
+    const { json: data } = await apiFetch(
       `${window.ENV.SUPABASE_URL}/rest/v1/view_orders_with_customers?customer_id=eq.${customerId}`,
-      {
-        headers: {
-          apikey: window.ENV.SUPABASE_ANON_KEY,
-          Authorization: `Bearer ${window.ENV.SUPABASE_ANON_KEY}`,
-        },
-      }
+      { method: 'GET' }
     );
 
-    if (!res.ok) throw new Error('Erro ao buscar pedidos');
-    const data = await res.json();
+    ordersTBody.textContent = ''; // limpa seguro
 
-    if (!data || data.length === 0) {
+    if (!Array.isArray(data) || data.length === 0) {
       showMessage('Nenhum pedido encontrado.', 'info');
-      queryBtn.textContent = 'Consultar Pedidos';
-      queryBtn.disabled = false;
       return;
     }
 
-    data.forEach((order) => {
-      const row = document.createElement('tr');
-      row.innerHTML = `
-        <td>${order.order_id}</td>
-        <td>${order.status}</td>
-        <td>R$ ${order.total_amount.toFixed(2)}</td>
-        <td>${new Date(order.order_date).toLocaleDateString('pt-BR')}</td>
-      `;
-      ordersTable.appendChild(row);
-    });
+    for (const order of data) {
+      const tr = document.createElement('tr');
+
+      const tdId = document.createElement('td');
+      tdId.textContent = String(order.order_id ?? '');
+      const tdSt = document.createElement('td');
+      tdSt.textContent = String(order.status ?? '');
+      const tdTot = document.createElement('td');
+      tdTot.textContent = `R$ ${Number(order.total_amount ?? 0).toFixed(2)}`;
+      const tdDt = document.createElement('td');
+      const when = order.order_date_formatted ||
+                   new Date(order.order_created_at).toLocaleString('pt-BR');
+      tdDt.textContent = when;
+
+      tr.append(tdId, tdSt, tdTot, tdDt);
+      ordersTBody.appendChild(tr);
+    }
 
     showMessage('Pedidos carregados com sucesso!', 'success');
-  } catch (err) {
-    showMessage(`❌ ${err.message}`, 'error');
-  } finally {
-    queryBtn.disabled = false;
-    queryBtn.textContent = 'Consultar Pedidos';
-  }
+  }).catch(err => showMessage(`❌ ${err.message}`, 'error'))
+    .finally(() => setBusy(false));
 });
