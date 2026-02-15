@@ -1,130 +1,110 @@
 -- =============================================
 -- SEED DATA: E-COMMERCE BACKEND (SUPABASE-FRIENDLY)
--- DO NOT ALTER auth.users. Use real UUIDs below.
+-- customers.user_id referencia auth.users.id (1–1 por usuário)
+-- Pré-requisito: usuários alice, bob, charlie já criados em auth.users
 -- =============================================
 
 BEGIN;
 
--- Cleaning with reset of IDs
-TRUNCATE TABLE order_items RESTART IDENTITY CASCADE;
-TRUNCATE TABLE orders RESTART IDENTITY CASCADE;
-TRUNCATE TABLE products RESTART IDENTITY CASCADE;
-TRUNCATE TABLE customers RESTART IDENTITY CASCADE;
+-- Limpeza (ordem importa por FK)
+TRUNCATE TABLE public.order_items CASCADE;
+TRUNCATE TABLE public.orders      CASCADE;
+TRUNCATE TABLE public.products    CASCADE;
+TRUNCATE TABLE public.customers   CASCADE;
 
 -- =============================================
--- 1) CUSTOMERS (linked to auth.users by user_id)
--- Only insert customers for users that exist in auth.users
-INSERT INTO customers (user_id, name, email, phone, address)
-SELECT au.id, 'Alice Doe', 'alice@example.com', '1111111111', '123 Main St'
+-- 1) CUSTOMERS (1–1 com auth.users)
+-- Cria perfis para usuários que já existem em auth.users.
+-- customers.id é gerado (gen_random_uuid); o vínculo é via user_id.
+INSERT INTO public.customers (user_id, name, email, phone, address)
+SELECT au.id, 'Alice Doe', lower(au.email), '1111111111', '123 Main St'
 FROM auth.users au
-WHERE au.email = 'alice@example.com'
-ON CONFLICT (email) DO NOTHING;
+WHERE au.email = 'alice@example.com';
 
-INSERT INTO customers (user_id, name, email, phone, address)
-SELECT au.id, 'Bob Smith', 'bob@example.com', '2222222222', '456 High St'
+INSERT INTO public.customers (user_id, name, email, phone, address)
+SELECT au.id, 'Bob Smith', lower(au.email), '2222222222', '456 High St'
 FROM auth.users au
-WHERE au.email = 'bob@example.com'
-ON CONFLICT (email) DO NOTHING;
+WHERE au.email = 'bob@example.com';
 
-INSERT INTO customers (user_id, name, email, phone, address)
-SELECT au.id, 'Charlie Brown', 'charlie@example.com', '3333333333', '789 Park Ave'
+INSERT INTO public.customers (user_id, name, email, phone, address)
+SELECT au.id, 'Charlie Brown', lower(au.email), '3333333333', '789 Park Ave'
 FROM auth.users au
-WHERE au.email = 'charlie@example.com'
-ON CONFLICT (email) DO NOTHING;
+WHERE au.email = 'charlie@example.com';
 
 -- =============================================
 -- 2) PRODUCTS
--- Guarantee unique(name) and/or unique(sku)
-INSERT INTO products (name, description, price, stock, sku)
+-- Catálogo inicial de produtos.
+INSERT INTO public.products (name, description, price, stock, active)
 VALUES
-  ('Laptop',  '15-inch laptop',      3500.00,  5,  'LAP-15'),
-  ('Mouse',   'Wireless mouse',       150.00, 50,  'MOU-WLS'),
-  ('Keyboard','Mechanical keyboard',  200.00, 20,  'KEY-MEC'),
-  ('Monitor', '27-inch 4K display',  1200.00, 10,  'MON-27-4K'),
-  ('Headset', 'Noise cancelling',     350.00, 15,  'HDS-NC')
-ON CONFLICT (name) DO NOTHING;
+  ('Laptop',   '15-inch laptop',        3500.00,  5,  true),
+  ('Mouse',    'Wireless mouse',         150.00, 50,  true),
+  ('Keyboard', 'Mechanical keyboard',    200.00, 20,  true),
+  ('Monitor',  '27-inch 4K display',    1200.00, 10,  true),
+  ('Headset',  'Noise cancelling',       350.00, 15,  true);
+
+-- Como usamos TRUNCATE acima, não precisamos de ON CONFLICT aqui.
 
 -- =============================================
--- 3) ORDERS (one order per customer)
-INSERT INTO orders (customer_id, total_amount, status)
-SELECT c.id, 0, 'pending'::order_status
-FROM customers c
-ON CONFLICT DO NOTHING;
+-- 3) ORDERS (um pedido por cliente para o seed)
+-- total_amount começa 0; a trigger em order_items vai recalcular depois.
+INSERT INTO public.orders (customer_id, order_date, total_amount, status)
+SELECT c.id, now(), 0, 'pending'::order_status
+FROM public.customers c;
 
 -- =============================================
 -- 4) ORDER ITEMS
--- Helper CTE to get (order_id by customer) and (product_id by name)
-WITH
-  oc AS (
-    SELECT o.id AS order_id, c.email
-    FROM orders o
-    JOIN customers c ON c.id = o.customer_id
-  ),
-  p AS (
-    SELECT id, name FROM products
-  )
--- All order items in one statement
-INSERT INTO order_items (order_id, product_id, quantity, unit_price)
--- Alice: Laptop (1) + Mouses (2)
-SELECT oc.order_id, p.id, 1, p2.price
-FROM oc
-JOIN p ON p.name = 'Laptop'
-JOIN products p2 ON p2.id = p.id
+-- CTEs para mapear pedidos por cliente e produto/preço
+WITH oc AS (
+  SELECT o.id AS order_id, c.email
+  FROM public.orders o
+  JOIN public.customers c ON c.id = o.customer_id
+),
+pp AS (
+  SELECT id, name, price FROM public.products
+)
+INSERT INTO public.order_items (order_id, product_id, quantity, unit_price)
+-- Alice: 1x Laptop + 2x Mouse
+SELECT oc.order_id, pp.id, 1, pp.price
+FROM oc JOIN pp ON pp.name = 'Laptop'
 WHERE oc.email = 'alice@example.com'
 UNION ALL
-SELECT oc.order_id, p.id, 2, p2.price
-FROM oc
-JOIN p ON p.name = 'Mouse'
-JOIN products p2 ON p2.id = p.id
+SELECT oc.order_id, pp.id, 2, pp.price
+FROM oc JOIN pp ON pp.name = 'Mouse'
 WHERE oc.email = 'alice@example.com'
 UNION ALL
--- Bob: Keyboard (1) + Monitors (1)
-SELECT oc.order_id, p.id, 1, p2.price
-FROM oc
-JOIN p ON p.name = 'Keyboard'
-JOIN products p2 ON p2.id = p.id
+-- Bob: 1x Keyboard + 1x Monitor
+SELECT oc.order_id, pp.id, 1, pp.price
+FROM oc JOIN pp ON pp.name = 'Keyboard'
 WHERE oc.email = 'bob@example.com'
 UNION ALL
-SELECT oc.order_id, p.id, 1, p2.price
-FROM oc
-JOIN p ON p.name = 'Monitor'
-JOIN products p2 ON p2.id = p.id
+SELECT oc.order_id, pp.id, 1, pp.price
+FROM oc JOIN pp ON pp.name = 'Monitor'
 WHERE oc.email = 'bob@example.com'
 UNION ALL
--- Charlie: Headsets (3)
-SELECT oc.order_id, p.id, 3, p2.price
-FROM oc
-JOIN p ON p.name = 'Headset'
-JOIN products p2 ON p2.id = p.id
+-- Charlie: 3x Headset
+SELECT oc.order_id, pp.id, 3, pp.price
+FROM oc JOIN pp ON pp.name = 'Headset'
 WHERE oc.email = 'charlie@example.com';
 
--- =============================================
--- 5) Update totals
-UPDATE orders o
-SET total_amount = t.total
-FROM (
-  SELECT order_id, SUM(quantity * unit_price)::numeric AS total
-  FROM order_items
-  GROUP BY order_id
-) t
-WHERE t.order_id = o.id;
+-- A partir daqui, como temos trigger em order_items,
+-- cada INSERT já dispara o recálculo de orders.total_amount.
 
 -- =============================================
--- 6) Update status (example)
-UPDATE orders o
+-- 5) Status de exemplo (muda o estado de alguns pedidos)
+UPDATE public.orders o
 SET status = CASE
-  WHEN o.customer_id = (SELECT id FROM customers WHERE email = 'alice@example.com')  THEN 'paid'::order_status
-  WHEN o.customer_id = (SELECT id FROM customers WHERE email = 'bob@example.com')    THEN 'shipped'::order_status
+  WHEN o.customer_id = (SELECT id FROM public.customers WHERE email = 'alice@example.com')  THEN 'paid'::order_status
+  WHEN o.customer_id = (SELECT id FROM public.customers WHERE email = 'bob@example.com')    THEN 'shipped'::order_status
   ELSE 'pending'::order_status
 END;
 
 -- =============================================
--- 7) Reduce stock based on the items of the order
-UPDATE products p
+-- 6) Baixa de estoque com base nos itens vendidos
+UPDATE public.products p
 SET stock = p.stock - COALESCE(s.sold, 0)
 FROM (
   SELECT product_id, SUM(quantity) AS sold
-  FROM order_items
+  FROM public.order_items
   GROUP BY product_id
 ) s
 WHERE s.product_id = p.id;
